@@ -4,6 +4,12 @@ const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
 const path = require('path');
+const Queue = require('bull'); 
+const Redis = require('ioredis');
+
+// Подключение к Redis
+const redisClient = new Redis();
+const uploadQueue = new Queue('uploadQueue', { redis: { host: '127.0.0.1', port: 6379 } });
 
 // Конфигурация из .env
 const bot = new Telegraf(process.env.BOT_API_KEY);
@@ -21,43 +27,6 @@ function logToFile(message) {
 	fs.appendFile(logFilePath, logMessage, (err) => {
 		if (err) console.error('Ошибка записи лога:', err);
 	});
-}
-
-// Функция загрузки изображения в WordPress
-async function uploadToWordPress(filePath) {
-	const form = new FormData();
-	form.append('file', fs.createReadStream(filePath));
-	const auth = Buffer.from(`${WP_USER}:${WP_PASSWORD}`).toString('base64');
-	try {
-		const response = await axios.post(`${WP_URL}/media`, form, {
-			headers: {
-				...form.getHeaders(),
-				Authorization: `Basic ${auth}`
-			}
-		});
-		return response.data;
-	} catch (error) {
-		console.error('Ошибка загрузки в WordPress:', error.response?.data || error);
-		return null;
-	}
-}
-
-// Функция создания поста в WordPress с изображением
-async function createPost(title, imageId) {
-	const auth = Buffer.from(`${WP_USER}:${WP_PASSWORD}`).toString('base64');
-	try {
-		const response = await axios.post(`${WP_URL}/posts`, {
-			title: title,
-			status: 'publish',
-			featured_media: imageId
-		}, {
-			headers: { Authorization: `Basic ${auth}` }
-		});
-		return response.data.link;
-	} catch (error) {
-		console.error('Ошибка создания поста:', error.response?.data || error);
-		return null;
-	}
 }
 
 // Обработчик команды /start
@@ -87,6 +56,10 @@ bot.on('text', async (ctx) => {
 
 		const fullName = ctx.message.text;
 		logToFile(`${ctx.from.username} [${ctx.from.id}]: ${ctx.message.text}`);
+
+		// Отправляем фото в очередь для обработки
+    await uploadQueue.add({ userId: ctx.from.id, username: ctx.from.username, fullName, photoPath: ctx.session.photoPath });
+
 		ctx.reply(`Загружаем данные на сайт...`);
 
 		const imageData = await uploadToWordPress(ctx.session.photoPath);
@@ -121,6 +94,7 @@ bot.on('photo', async (ctx) => {
 		const writer = fs.createWriteStream(localPath);
 
 		response.data.pipe(writer);
+
 		writer.on('finish', () => {
 			ctx.session.photoPath = localPath;
 			logToFile(`${ctx.from.username} [${ctx.from.id}]: Прикреплено фото`);
@@ -133,7 +107,7 @@ bot.on('photo', async (ctx) => {
 	}
 });
 
-// Обработчик файлов вместо фото
+// Обработчик файлов
 bot.on('document', (ctx) => {
 	if (!ctx.session.accessGranted) {
 		return ctx.reply('Сначала введите пароль для доступа.');
@@ -141,6 +115,8 @@ bot.on('document', (ctx) => {
     ctx.reply('Прикрепите фото как изображение, а не как файл.');
 	}
 });
+
+
 
 // Глобальный предохранитель
 bot.catch((err, ctx) => {

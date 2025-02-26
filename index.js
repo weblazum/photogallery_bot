@@ -1,5 +1,6 @@
 require('dotenv').config();
 const { Telegraf, session } = require('telegraf');
+const rateLimit = require('telegraf-ratelimit');
 const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
@@ -9,10 +10,19 @@ const path = require('path');
 // Конфигурация из .env
 const bot = new Telegraf(process.env.BOT_API_KEY);
 bot.use(session());
+
 const WP_URL = process.env.WP_URL;
 const WP_USER = process.env.WP_USER;
 const WP_PASSWORD = process.env.WP_PASSWORD;
 const ACCESS_PASSWORD = process.env.ACCESS_PASSWORD;
+
+// Ограничение запросов (20 сообщений за 10 секунд)
+const limitConfig = {
+    window: 10000,
+    limit: 20,
+    onLimitExceeded: (ctx) => ctx.reply('Слишком много запросов. Подождите немного.'),
+};
+bot.use(rateLimit(limitConfig));
 
 // Функция для записи логов
 function logToFile(message) {
@@ -81,16 +91,25 @@ bot.on('photo', async (ctx) => {
 
 		const fileId = ctx.message.photo.pop().file_id;
 		const fileUrl = await ctx.telegram.getFileLink(fileId);
-		const localPath = path.join(__dirname, `temp_${ctx.from.id}.jpg`);
-		const response = await axios({ url: fileUrl.href, responseType: 'stream' });
-		const writer = fs.createWriteStream(localPath);
+		const localPath = path.join(__dirname, `photo_${ctx.from.id}.jpg`);
+		const response = await axios({
+			url: fileUrl.href,
+			responseType: 'stream',
+		});
 
+		const writer = fs.createWriteStream(localPath);
 		response.data.pipe(writer);
 
 		writer.on('finish', () => {
 			ctx.session.photoPath = localPath;
 			logToFile(`${ctx.from.username} [${ctx.from.id}]: Прикреплено фото`);
 			ctx.reply('Теперь напишите ФИО.');
+		});
+
+		writer.on('error', (error) => {
+			console.error('Ошибка при сохранении фото:', error);
+			logToFile(`${ctx.from.username} [${ctx.from.id}]: Ошибка загрузки фото`);
+			ctx.reply('Ошибка при обработке фото. Попробуйте снова.');
 		});
 	} catch (error) {
 		console.error('Ошибка обработки фото:', error);
@@ -146,7 +165,6 @@ async function createPost(title, imageId) {
 		return null;
 	}
 }
-
 
 // Глобальный предохранитель
 bot.catch((err, ctx) => {

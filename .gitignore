@@ -5,3 +5,8 @@ backup
 bot_logs.txt
 bot-load-test.yml
 pictures
+.nextcloudsync.log
+.sync_3f35731b7866.db
+.sync_3f35731b7866.db-wal
+artillery-summary.txt
+Desktop.ini
